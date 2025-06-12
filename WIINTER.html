@@ -1,0 +1,704 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cozy Winter Scene (Night)</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #0a0a20; /* Dark blue night sky */ }
+        canvas { display: block; }
+    </style>
+</head>
+<body>
+    <script type="module">
+        // Global variables for scene, camera, renderer, etc.
+        let scene, camera, renderer;
+        let characterGroup; // Group for the complex character
+        let body, head, leg1, leg2, arm1, arm2; // References to character parts for animation
+        let windParticles; // For general falling snow
+        let kickUpParticles; // For snow kicked up by character movement
+        const clock = new THREE.Clock();
+
+        // Object to store key states for movement (WASD)
+        const keys = {
+            'w': false,
+            'a': false,
+            's': false,
+            'd': false
+        };
+
+        // Camera control variables
+        let isDragging = false;
+        let previousMouseX = 0;
+        let cameraRotationAngle = 0; // Current angle of the camera around the character
+        const cameraDistance = 7;    // Distance of the camera from the character
+        const cameraOffsetY = 5;     // Fixed camera height above the character
+
+        // Particle system variables (General Snowfall)
+        const snowDrawDistance = 40; // Max distance from character particles will be rendered
+        const windDriftSpeed = 0.5; // Controls horizontal movement of snow
+
+        // Particle system variables (Snow Kick-up)
+        const kickUpCount = 100; // Number of small particles for kick-up effect
+        const kickUpMaxLifespan = 0.5; // Seconds until particle fades
+        const kickUpEmitRate = 10; // Particles emitted per second when moving
+        let kickUpParticlePool = []; // Pool to reuse particles
+        let kickUpGeometry;
+        let kickUpPositions;
+        let kickUpSizes; // For fading effect
+
+        // Initialize the scene
+        function init() {
+            // Scene setup
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x0a0a20); // Dark blue night sky
+
+            // Camera setup (PerspectiveCamera for 3D view)
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            // Initial camera position will be updated by character follow logic in animate()
+            camera.position.set(0, cameraOffsetY, cameraDistance); // Initial position, will be overridden
+            camera.lookAt(0, 0, 0);
+
+            // Renderer setup
+            renderer = new THREE.WebGLRenderer({ antialias: true }); // Enable antialiasing for smoother edges
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.shadowMap.enabled = true; // Enable shadow maps
+            renderer.shadowMap.type = THREE.PCFSoftShadowMap; // Softer shadows
+
+            // --- Atmospheric Lighting (Physical Lighting Model) ---
+            renderer.toneMapping = THREE.ReinhardToneMapping; // Apply Reinhard Tone Mapping
+            renderer.toneMappingExposure = 3.0; // INCREASED EXPOSURE for a brighter, more vibrant scene (Unity-like render)
+
+            document.body.appendChild(renderer.domElement);
+
+            // Lighting (Night scene, adjusted for brightness and PBR materials)
+            // Much brighter ambient light
+            const ambientLight = new THREE.AmbientLight(0x606080, 1.2); // Increased intensity significantly
+            scene.add(ambientLight);
+
+            // Brighter bluish moonlight (Directional Light acts as the moon)
+            const directionalLight = new THREE.DirectionalLight(0xb0e0e6, 2.0); // Increased intensity significantly
+            directionalLight.position.set(5, 15, 5); // Position of the 'moon'
+            directionalLight.castShadow = true;
+            // Configure shadow properties for the directional light
+            directionalLight.shadow.mapSize.width = 1024;
+            directionalLight.shadow.mapSize.height = 1024;
+            directionalLight.shadow.camera.near = 0.5;
+            directionalLight.shadow.camera.far = 50;
+            directionalLight.shadow.camera.left = -20;
+            directionalLight.shadow.camera.right = 20;
+            directionalLight.shadow.camera.top = 20;
+            directionalLight.shadow.camera.bottom = -20;
+            scene.add(directionalLight);
+
+            // --- Materials (Now using MeshStandardMaterial for PBR) ---
+            const snowMaterial = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.8, metalness: 0.1 }); // Slightly reflective snow
+            const characterMaterial = new THREE.MeshStandardMaterial({ color: 0xff8c00, roughness: 0.7, metalness: 0.0 });
+            const trunkMaterial = new THREE.MeshStandardMaterial({ color: 0x8B4513, roughness: 0.9, metalness: 0.0 });
+            const leavesMaterial = new THREE.MeshStandardMaterial({ color: 0x228B22, roughness: 0.6, metalness: 0.0 });
+            const ornamentMaterialRed = new THREE.MeshStandardMaterial({ color: 0xff0000, roughness: 0.3, metalness: 0.1 });
+            const ornamentMaterialBlue = new THREE.MeshStandardMaterial({ color: 0x0000ff, roughness: 0.3, metalness: 0.1 });
+            const ornamentMaterialYellow = new THREE.MeshStandardMaterial({ color: 0xffff00, roughness: 0.3, metalness: 0.1 });
+            const houseBaseMaterial = new THREE.MeshStandardMaterial({ color: 0x8B4513, roughness: 0.8, metalness: 0.0 });
+            const houseRoofMaterial = new THREE.MeshStandardMaterial({ color: 0xa0522d, roughness: 0.8, metalness: 0.0 });
+            const houseDoorMaterial = new THREE.MeshStandardMaterial({ color: 0x5a2d0d, roughness: 0.8, metalness: 0.0 });
+            const giftBoxMaterialGreen = new THREE.MeshStandardMaterial({ color: 0x00ff00, roughness: 0.3, metalness: 0.0 });
+            const giftBoxMaterialPink = new THREE.MeshStandardMaterial({ color: 0xff00ff, roughness: 0.3, metalness: 0.0 });
+            const giftBoxMaterialCyan = new THREE.MeshStandardMaterial({ color: 0x00ffff, roughness: 0.3, metalness: 0.0 });
+            const giftBoxMaterialOrange = new THREE.MeshStandardMaterial({ color: 0xffa500, roughness: 0.3, metalness: 0.0 });
+            const giftRibbonMaterialWhite = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.2, metalness: 0.2 });
+            const giftRibbonMaterialYellow = new THREE.MeshStandardMaterial({ color: 0xffff00, roughness: 0.2, metalness: 0.2 });
+            const giftRibbonMaterialBlue = new THREE.MeshStandardMaterial({ color: 0x0000ff, roughness: 0.2, metalness: 0.2 });
+            const snowmanMaterial = new THREE.MeshStandardMaterial({ color: 0xf0f0f0, roughness: 0.7, metalness: 0.0 });
+            const noseMaterial = new THREE.MeshStandardMaterial({ color: 0xffa500, roughness: 0.6, metalness: 0.0 });
+            const eyeMaterial = new THREE.MeshStandardMaterial({ color: 0x000000, roughness: 0.1, metalness: 0.0 });
+            const rockPatchMaterial = new THREE.MeshStandardMaterial({ color: 0x8B4513, roughness: 0.9, metalness: 0.0 });
+            const dirtPatchMaterial = new THREE.MeshStandardMaterial({ color: 0x5C4033, roughness: 0.9, metalness: 0.0 });
+
+
+            // Ground (Snow)
+            const groundGeometry = new THREE.PlaneGeometry(200, 200); // Increased ground size
+            const ground = new THREE.Mesh(groundGeometry, snowMaterial); // Using snowMaterial
+            ground.rotation.x = -Math.PI / 2; // Rotate to be horizontal
+            ground.position.y = 0; // Ensure ground is at y=0
+            ground.receiveShadow = true; // Ground can receive shadows
+            scene.add(ground);
+
+            // Low-Poly Pokémon-like Character (Composite object)
+            characterGroup = new THREE.Group();
+
+            // Body
+            body = new THREE.Mesh(new THREE.SphereGeometry(1, 8, 8), characterMaterial);
+            body.position.y = 1;
+            body.castShadow = true;
+            characterGroup.add(body);
+
+            // Head
+            head = new THREE.Mesh(new THREE.SphereGeometry(0.7, 8, 8), characterMaterial);
+            head.position.y = 2.2;
+            head.castShadow = true;
+            characterGroup.add(head);
+
+            // Ears
+            const earGeometry = new THREE.SphereGeometry(0.2, 4, 4);
+            const ear1 = new THREE.Mesh(earGeometry, characterMaterial);
+            ear1.position.set(-0.6, 2.7, 0);
+            ear1.castShadow = true;
+            characterGroup.add(ear1);
+
+            const ear2 = new THREE.Mesh(earGeometry, characterMaterial);
+            ear2.position.set(0.6, 2.7, 0);
+            ear2.castShadow = true;
+            characterGroup.add(ear2);
+
+            // Arms
+            const armGeometry = new THREE.BoxGeometry(0.3, 1, 0.3);
+            arm1 = new THREE.Mesh(armGeometry, characterMaterial);
+            arm1.position.set(-1.1, 1, 0);
+            arm1.castShadow = true;
+            characterGroup.add(arm1);
+
+            arm2 = new THREE.Mesh(armGeometry, characterMaterial);
+            arm2.position.set(1.1, 1, 0);
+            arm2.castShadow = true;
+            characterGroup.add(arm2);
+
+            // Legs
+            const legGeometry = new THREE.BoxGeometry(0.4, 0.8, 0.4);
+            leg1 = new THREE.Mesh(legGeometry, characterMaterial);
+            leg1.position.set(-0.6, 0.4, 0);
+            leg1.castShadow = true;
+            characterGroup.add(leg1);
+
+            leg2 = new THREE.Mesh(legGeometry, characterMaterial);
+            leg2.position.set(0.6, 0.4, 0);
+            leg2.castShadow = true;
+            characterGroup.add(leg2);
+
+            // Set initial position of the character group
+            characterGroup.position.set(0, 0, 0);
+            scene.add(characterGroup);
+
+            // --- Environmental Objects ---
+
+            // Function to create a standard tree
+            function createTree(x, z) {
+                const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.2, 2, 8), trunkMaterial);
+                trunk.position.set(x, 1, z);
+                trunk.castShadow = true;
+                trunk.receiveShadow = true;
+                scene.add(trunk);
+
+                const leaves = new THREE.Mesh(new THREE.ConeGeometry(1, 3, 8), leavesMaterial);
+                leaves.position.set(x, 3, z);
+                leaves.castShadow = true;
+                leaves.receiveShadow = true;
+                scene.add(leaves);
+            }
+
+            // Function to create a decorated Christmas tree
+            function createDecoratedTree(x, z) {
+                const treeGroup = new THREE.Group();
+
+                const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.2, 2, 8), trunkMaterial);
+                trunk.position.set(x, 1, z);
+                trunk.castShadow = true;
+                trunk.receiveShadow = true;
+                treeGroup.add(trunk);
+
+                const leaves = new THREE.Mesh(new THREE.ConeGeometry(1, 3, 8), leavesMaterial);
+                leaves.position.set(x, 3, z);
+                leaves.castShadow = true;
+                leaves.receiveShadow = true;
+                treeGroup.add(leaves);
+
+                const ornamentGeometry = new THREE.SphereGeometry(0.15, 6, 6);
+
+                for (let i = 0; i < 8; i++) {
+                    const ornament = new THREE.Mesh(ornamentGeometry, [ornamentMaterialRed, ornamentMaterialBlue, ornamentMaterialYellow][Math.floor(Math.random() * 3)]);
+                    ornament.position.set(
+                        x + (Math.random() - 0.5) * 0.8,
+                        3 + (Math.random() - 0.5) * 2,
+                        z + (Math.random() - 0.5) * 0.8
+                    );
+                    ornament.castShadow = true;
+                    treeGroup.add(ornament);
+                }
+                scene.add(treeGroup);
+            }
+
+            // Function to create a low-poly house
+            function createHouse(x, z, rotationY = 0) {
+                const houseGroup = new THREE.Group();
+
+                const base = new THREE.Mesh(new THREE.BoxGeometry(4, 3, 4), houseBaseMaterial);
+                base.position.set(x, 1.5, z);
+                base.castShadow = true;
+                base.receiveShadow = true;
+                houseGroup.add(base);
+
+                const roof = new THREE.Mesh(new THREE.ConeGeometry(3, 2, 4), houseRoofMaterial);
+                roof.rotation.y = Math.PI / 4;
+                roof.position.set(x, 3.5, z);
+                roof.castShadow = true;
+                roof.receiveShadow = true;
+                houseGroup.add(roof);
+
+                const door = new THREE.Mesh(new THREE.BoxGeometry(1, 1.8, 0.1), houseDoorMaterial);
+                door.position.set(x, 0.9, z + 2.01);
+                door.castShadow = true;
+                houseGroup.add(door);
+
+                houseGroup.rotation.y = rotationY;
+                scene.add(houseGroup);
+            }
+
+            // Function to create a gift box
+            function createGift(x, z, size = 1, color, ribbonColor) {
+                const giftGroup = new THREE.Group();
+                const boxMaterial = new THREE.MeshStandardMaterial({ color: color, roughness: 0.3, metalness: 0.0 });
+                const ribbonMaterial = new THREE.MeshStandardMaterial({ color: ribbonColor, roughness: 0.2, metalness: 0.2 });
+
+                const box = new THREE.Mesh(new THREE.BoxGeometry(size, size, size), boxMaterial);
+                box.position.set(x, size / 2, z);
+                box.castShadow = true;
+                giftGroup.add(box);
+
+                const ribbonV = new THREE.Mesh(new THREE.BoxGeometry(size + 0.05, size + 0.05, 0.1), ribbonMaterial);
+                ribbonV.position.set(x, size / 2, z);
+                ribbonV.rotation.y = Math.PI / 2;
+                ribbonV.castShadow = true;
+                giftGroup.add(ribbonV);
+
+                const ribbonH = new THREE.Mesh(new THREE.BoxGeometry(size + 0.05, size + 0.05, 0.1), ribbonMaterial);
+                ribbonH.position.set(x, size / 2, z);
+                ribbonH.castShadow = true;
+                giftGroup.add(ribbonH);
+
+                scene.add(giftGroup);
+            }
+
+            // Function to create a simple snowman
+            function createSnowman(x, z) {
+                const snowmanGroup = new THREE.Group();
+
+                const bottom = new THREE.Mesh(new THREE.SphereGeometry(1.2, 10, 10), snowmanMaterial);
+                bottom.position.set(x, 1.2, z);
+                bottom.castShadow = true;
+                snowmanGroup.add(bottom);
+
+                const middle = new THREE.Mesh(new THREE.SphereGeometry(0.8, 10, 10), snowmanMaterial);
+                middle.position.set(x, 2.8, z);
+                middle.castShadow = true;
+                snowmanGroup.add(middle);
+
+                const headSnowman = new THREE.Mesh(new THREE.SphereGeometry(0.6, 10, 10), snowmanMaterial);
+                headSnowman.position.set(x, 4.0, z);
+                headSnowman.castShadow = true;
+                snowmanGroup.add(headSnowman);
+
+                const nose = new THREE.Mesh(new THREE.ConeGeometry(0.15, 0.5, 8), noseMaterial);
+                nose.rotation.x = Math.PI / 2;
+                nose.position.set(x, 4.0, z + 0.6);
+                nose.castShadow = true;
+                snowmanGroup.add(nose);
+
+                const eyeGeometry = new THREE.SphereGeometry(0.08, 6, 6);
+                const eye1 = new THREE.Mesh(eyeGeometry, eyeMaterial);
+                eye1.position.set(x - 0.25, 4.1, z + 0.55);
+                eye1.castShadow = true;
+                snowmanGroup.add(eye1);
+
+                const eye2 = new THREE.Mesh(eyeGeometry, eyeMaterial);
+                eye2.position.set(x + 0.25, 4.1, z + 0.55);
+                eye2.castShadow = true;
+                snowmanGroup.add(eye2);
+
+                scene.add(snowmanGroup);
+            }
+
+            // Function to create low-poly mountains
+            function createMountain(x, z, scale = 1) {
+                const mountainGeometry = new THREE.ConeGeometry(10 * scale, 15 * scale, 8);
+                const mountain = new THREE.Mesh(mountainGeometry, snowMaterial); // Mountains are snow-capped
+                mountain.position.set(x, (15 * scale) / 2, z);
+                mountain.castShadow = true;
+                mountain.receiveShadow = true;
+                scene.add(mountain);
+            }
+
+            // Function to create varied terrain patches (e.g., exposed rock/dirt)
+            function createTerrainPatch(x, z, type = 'rock', sizeX = 5, sizeZ = 5, height = 0.1) {
+                let patchMaterial;
+                if (type === 'rock') {
+                    patchMaterial = rockPatchMaterial;
+                } else { // Default to dirt/darker ground
+                    patchMaterial = dirtPatchMaterial;
+                }
+
+                const patch = new THREE.Mesh(new THREE.BoxGeometry(sizeX, height, sizeZ), patchMaterial);
+                patch.position.set(x, height / 2, z);
+                patch.castShadow = true;
+                patch.receiveShadow = true;
+                scene.add(patch);
+            }
+
+
+            // --- Place various environmental objects ---
+            // Existing Trees
+            createTree(10, 5);
+            createTree(-8, -12);
+            createTree(15, -7);
+            createTree(-5, 10);
+            createTree(20, 15);
+            createTree(-15, -5);
+            createTree(35, 25);
+            createTree(-35, -25);
+
+            // New: Decorated Christmas Trees
+            createDecoratedTree(-12, 8);
+            createDecoratedTree(8, -18);
+            createDecoratedTree(-20, -10);
+            createDecoratedTree(28, -20);
+            createDecoratedTree(-18, 30);
+
+            // New: Houses/Cabins
+            createHouse(25, 0, Math.PI / 4);
+            createHouse(-20, 20, -Math.PI / 8);
+            createHouse(0, -25, Math.PI / 2);
+            createHouse(-30, -5, Math.PI / 6);
+            createHouse(10, 30, Math.PI / 3);
+            createHouse(-15, -35, -Math.PI / 5);
+
+            // New: Gifts
+            createGift(18, -6, 0.8, 0x00ff00, 0xff0000); // Green gift with red ribbon
+            createGift(17, -5, 1.0, 0xff00ff, 0xffff00); // Pink gift with yellow ribbon
+            createGift(-10, 12, 0.7, 0x00ffff, 0xff00ff); // Cyan gift with pink ribbon
+            createGift(26, -18, 0.9, 0xffa500, 0x0000ff); // Orange gift with blue ribbon
+
+            // New: Snowmen
+            createSnowman(12, -10);
+            createSnowman(-2, 18);
+            createSnowman(30, 8);
+            createSnowman(-25, -20);
+
+            // New: Mountains in the background
+            createMountain(50, -50, 2);
+            createMountain(-60, -40, 1.5);
+            createMountain(-40, 60, 2.5);
+            createMountain(70, 70, 1.8);
+            createMountain(-70, 0, 2.2);
+            createMountain(0, -70, 1.7);
+
+            // New: Terrain variations (rocky/dirt patches)
+            createTerrainPatch(5, -15, 'rock', 8, 8, 0.2);
+            createTerrainPatch(-10, 25, 'dirt', 6, 6, 0.15);
+            createTerrainPatch(20, 30, 'rock', 10, 7, 0.3);
+            createTerrainPatch(-30, -10, 'dirt', 7, 9, 0.1);
+            createTerrainPatch(0, 0, 'rock', 4, 4, 0.1); // Small patch near start
+
+
+            // Wind Particles (Snow particles)
+            const particleCount = 4000;
+            const particles = new THREE.BufferGeometry();
+            const positions = [];
+            const colors = [];
+            const pColor = new THREE.Color(0xffffff);
+
+            for (let i = 0; i < particleCount; i++) {
+                positions.push(Math.random() * 200 - 100);
+                positions.push(Math.random() * 40 + 10);
+                positions.push(Math.random() * 200 - 100);
+                colors.push(pColor.r, pColor.g, pColor.b);
+            }
+
+            particles.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+            particles.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+
+            const particleMaterial = new THREE.PointsMaterial({
+                size: 0.3,
+                vertexColors: true,
+                transparent: true,
+                opacity: 0.8,
+                blending: THREE.AdditiveBlending
+            });
+
+            windParticles = new THREE.Points(particles, particleMaterial);
+            scene.add(windParticles);
+
+            // --- Snow Kick-up Particles Initialization ---
+            kickUpGeometry = new THREE.BufferGeometry();
+            kickUpPositions = new Float32Array(kickUpCount * 3);
+            kickUpSizes = new Float32Array(kickUpCount); // For fading effect
+            kickUpParticlePool = []; // Stores current lifespan for each particle
+
+            for (let i = 0; i < kickUpCount; i++) {
+                kickUpPositions[i * 3] = 0;
+                kickUpPositions[i * 3 + 1] = -1000; // Off-screen initially
+                kickUpPositions[i * 3 + 2] = 0;
+                kickUpSizes[i] = 0; // Start invisible
+                kickUpParticlePool.push({
+                    x: 0, y: -1000, z: 0, // Position
+                    vx: 0, vy: 0, vz: 0, // Velocity
+                    lifespan: 0 // Current lifespan
+                });
+            }
+
+            kickUpGeometry.setAttribute('position', new THREE.BufferAttribute(kickUpPositions, 3));
+            kickUpGeometry.setAttribute('size', new THREE.BufferAttribute(kickUpSizes, 1)); // Custom attribute for size
+
+            const kickUpMaterial = new THREE.PointsMaterial({
+                color: 0xffffff,
+                size: 0.2, // Small particles
+                transparent: true,
+                opacity: 0.7,
+                blending: THREE.AdditiveBlending,
+                sizeAttenuation: true // Particles closer to camera appear larger
+            });
+            // To make size attribute work, a custom shader would be needed,
+            // for simplicity, we'll manually scale opacity based on lifespan here for quick fade.
+            // For true size attenuation, use ShaderMaterial or a custom PointsMaterial shader.
+
+            kickUpParticles = new THREE.Points(kickUpGeometry, kickUpMaterial);
+            scene.add(kickUpParticles);
+
+
+            // Event Listeners for keyboard input (WASD)
+            window.addEventListener('keydown', (event) => {
+                const key = event.key.toLowerCase();
+                if (key in keys) {
+                    keys[key] = true;
+                }
+            });
+
+            window.addEventListener('keyup', (event) => {
+                const key = event.key.toLowerCase();
+                if (key in keys) {
+                    keys[key] = false;
+                }
+            });
+
+            // Mouse events for camera control
+            renderer.domElement.addEventListener('mousedown', (event) => {
+                isDragging = true;
+                previousMouseX = event.clientX;
+            });
+
+            renderer.domElement.addEventListener('mousemove', (event) => {
+                if (!isDragging) return;
+                const deltaX = event.clientX - previousMouseX;
+                cameraRotationAngle += deltaX * 0.005; // Adjust rotation speed
+                previousMouseX = event.clientX;
+            });
+
+            renderer.domElement.addEventListener('mouseup', () => {
+                isDragging = false;
+            });
+
+            renderer.domElement.addEventListener('mouseleave', () => { // Stop dragging if mouse leaves canvas
+                isDragging = false;
+            });
+
+            // Handle window resizing
+            window.addEventListener('resize', onWindowResize, false);
+        }
+
+        // Function to handle window resizing
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        // Animation loop
+        function animate() {
+            requestAnimationFrame(animate);
+
+            const delta = clock.getDelta(); // Time elapsed since last frame
+            const elapsedTime = clock.getElapsedTime(); // Total elapsed time for animations
+
+            // Character movement speed - FURTHER INCREASED!
+            const moveSpeed = 15 * delta; // Increased from 8 to 15 for faster running
+
+            let isMoving = false; // Flag to check if character is moving
+
+            // Character movement based on key presses (WASD)
+            if (keys['w']) {
+                characterGroup.position.z -= moveSpeed;
+                isMoving = true;
+            }
+            if (keys['s']) {
+                characterGroup.position.z += moveSpeed;
+                isMoving = true;
+            }
+            if (keys['a']) {
+                characterGroup.position.x -= moveSpeed;
+                isMoving = true;
+            }
+            if (keys['d']) {
+                characterGroup.position.x += moveSpeed;
+                isMoving = true;
+            }
+
+            // Character Animation Logic (Simplified State Machine)
+            if (isMoving) {
+                // Run animation parameters
+                const runCycleSpeed = 15; // Faster speed for running animation
+                const runPhase = elapsedTime * runCycleSpeed;
+
+                // Leg swing (more exaggerated for running)
+                const swingAmplitude = 0.4; // Increased swing amplitude
+                leg1.rotation.x = Math.sin(runPhase) * swingAmplitude;
+                leg2.rotation.x = -Math.sin(runPhase) * swingAmplitude; // Opposite phase
+
+                // Arm swing (similar to legs, but adjusted)
+                const armSwingAmplitude = 0.3; // Amplitude for arm swing
+                arm1.rotation.x = Math.sin(runPhase + Math.PI / 2) * armSwingAmplitude; // Offset phase for natural arm movement
+                arm2.rotation.x = -Math.sin(runPhase + Math.PI / 2) * armSwingAmplitude; // Opposite phase
+
+                // Body vertical bounce (more pronounced for running)
+                const bounceAmplitude = 0.2; // Increased bounce amplitude
+                characterGroup.position.y = Math.abs(Math.sin(runPhase * 0.5)) * bounceAmplitude;
+
+                // Head bob (more pronounced for running)
+                const headBobAmplitude = 0.1; // Increased head bob amplitude
+                head.rotation.x = Math.sin(runPhase * 0.5) * headBobAmplitude;
+
+            } else {
+                // Idle animation
+                const idleCycleSpeed = 2; // Slower for idle
+                const idlePhase = elapsedTime * idleCycleSpeed;
+
+                // Reset legs to neutral position
+                leg1.rotation.x = 0;
+                leg2.rotation.x = 0;
+
+                // Reset arms to neutral position
+                arm1.rotation.x = 0;
+                arm2.rotation.x = 0;
+
+                // Gentle breathing/idle bounce
+                const idleBounce = Math.sin(idlePhase) * 0.05; // Smaller bounce for idle
+                characterGroup.position.y = Math.max(0, idleBounce); // Ensure it doesn't go below ground (y=0)
+
+                // Subtle head bob for idle
+                const idleHeadBob = Math.sin(idlePhase * 1.5) * 0.02; // Faster, smaller head movement
+                head.rotation.x = idleHeadBob;
+            }
+
+
+            // Update general wind particles position and reset if they go too low or out of draw distance
+            const particlePositions = windParticles.geometry.attributes.position.array;
+            const particleResetHeight = characterGroup.position.y + 10; // Reset particles well above character
+            const fallSpeedFactor = 10; // General fall speed
+
+            for (let i = 0; i < particlePositions.length; i += 3) {
+                // Apply fall
+                particlePositions[i + 1] -= (0.5 + Math.random() * 0.5) * delta * fallSpeedFactor;
+
+                // Apply horizontal wind drift
+                particlePositions[i] += (Math.random() - 0.5) * windDriftSpeed * delta; // X drift
+                particlePositions[i + 2] += (Math.random() - 0.5) * windDriftSpeed * delta; // Z drift
+
+                // Check distance from character to particle for culling
+                const dx = particlePositions[i] - characterGroup.position.x;
+                const dz = particlePositions[i + 2] - characterGroup.position.z;
+                const distance = Math.sqrt(dx * dx + dz * dz);
+
+                // Reset conditions: fallen too low OR out of draw distance
+                if (particlePositions[i + 1] < characterGroup.position.y - 2 || distance > snowDrawDistance) {
+                    // Reset particle to a new random position within the draw distance from the character
+                    particlePositions[i] = characterGroup.position.x + (Math.random() * 2 * snowDrawDistance - snowDrawDistance);
+                    particlePositions[i + 1] = particleResetHeight + (Math.random() * 5); // Reset higher
+                    particlePositions[i + 2] = characterGroup.position.z + (Math.random() * 2 * snowDrawDistance - snowDrawDistance);
+                }
+            }
+            windParticles.geometry.attributes.position.needsUpdate = true; // Important: tell Three.js to update vertex data
+
+
+            // --- Snow Kick-up Particles Animation ---
+            if (isMoving) {
+                // Emit new particles (simple emission based on delta time)
+                const particlesToEmit = Math.floor(kickUpEmitRate * delta);
+                for (let i = 0; i < particlesToEmit; i++) {
+                    // Find a dead particle in the pool
+                    let particleIndex = -1;
+                    for (let j = 0; j < kickUpCount; j++) {
+                        if (kickUpParticlePool[j].lifespan <= 0) {
+                            particleIndex = j;
+                            break;
+                        }
+                    }
+
+                    if (particleIndex !== -1) {
+                        const p = kickUpParticlePool[particleIndex];
+                        p.x = characterGroup.position.x + (Math.random() - 0.5) * 1.5; // Near feet
+                        p.y = characterGroup.position.y + 0.5; // Just above ground
+                        p.z = characterGroup.position.z + (Math.random() - 0.5) * 1.5;
+
+                        // Give random upward and outward velocity
+                        p.vx = (Math.random() - 0.5) * 2;
+                        p.vy = Math.random() * 3 + 1; // More upward velocity
+                        p.vz = (Math.random() - 0.5) * 2;
+                        p.lifespan = kickUpMaxLifespan; // Activate particle
+                        kickUpSizes[particleIndex] = 0.2; // Initial size
+                    }
+                }
+            }
+
+            // Update existing kick-up particles
+            for (let i = 0; i < kickUpCount; i++) {
+                const p = kickUpParticlePool[i];
+                if (p.lifespan > 0) {
+                    p.lifespan -= delta;
+
+                    // Apply velocity
+                    p.x += p.vx * delta;
+                    p.y += p.vy * delta;
+                    p.z += p.vz * delta;
+
+                    // Apply "gravity" to kick-up particles
+                    p.vy -= 9.8 * delta; // Simple gravity
+
+                    // Update positions in BufferAttribute
+                    kickUpPositions[i * 3] = p.x;
+                    kickUpPositions[i * 3 + 1] = p.y;
+                    kickUpPositions[i * 3 + 2] = p.z;
+
+                    // Fade out particle
+                    kickUpSizes[i] = (p.lifespan / kickUpMaxLifespan) * 0.2; // Scale size based on lifespan
+                    // You could also modify kickUpParticles.material.opacity here for true fading if desired,
+                    // but modifying individual particle opacity requires a custom shader.
+                    // For now, size reduction will simulate fading.
+                } else {
+                    // If particle is dead, hide it
+                    kickUpPositions[i * 3 + 1] = -1000; // Move off-screen
+                    kickUpSizes[i] = 0;
+                }
+            }
+            kickUpGeometry.attributes.position.needsUpdate = true;
+            kickUpGeometry.attributes.size.needsUpdate = true; // Update sizes attribute too
+
+
+            // Update camera position to follow the character, maintaining 360-degree orbit
+            const targetX = characterGroup.position.x + Math.sin(cameraRotationAngle) * cameraDistance;
+            const targetZ = characterGroup.position.z + Math.cos(cameraRotationAngle) * cameraDistance;
+
+            camera.position.x = targetX;
+            camera.position.y = characterGroup.position.y + cameraOffsetY;
+            camera.position.z = targetZ;
+
+            camera.lookAt(characterGroup.position.x, characterGroup.position.y + 1, characterGroup.position.z); // Always look slightly above character's base
+
+            renderer.render(scene, camera);
+        }
+
+        // Start the animation on window load.
+        window.onload = function () {
+            init(); // Initialize the scene
+            animate(); // Start the animation loop
+        }
+    </script>
+</body>
+</html>
